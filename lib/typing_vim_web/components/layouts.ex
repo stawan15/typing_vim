@@ -5,79 +5,91 @@ defmodule TypingVimWeb.Layouts do
   """
   use TypingVimWeb, :html
 
-  # Embed all files in layouts/* within this module.
-  # The default root.html.heex file contains the HTML
-  # skeleton of your application, namely HTML headers
-  # and other static content.
   embed_templates "layouts/*"
 
   @doc """
   Renders your app layout.
 
-  This function is typically invoked from every template,
-  and it often contains your application menu, sidebar,
-  or similar.
-
-  ## Examples
-
       <Layouts.app flash={@flash}>
         <h1>Content</h1>
       </Layouts.app>
-
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
-
-  attr :current_scope, :map,
-    default: nil,
-    doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
+  attr :online_count, :integer, default: nil
+  attr :active, :atom, default: nil
 
   slot :inner_block, required: true
 
   def app(assigns) do
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8">
-      <div class="flex-1">
-        <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
-        </a>
-      </div>
-      <div class="flex-none">
-        <ul class="flex flex-column px-1 space-x-4 items-center">
-          <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
-          <li>
-            <.theme_toggle />
-          </li>
-          <li>
-            <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </header>
+    <div class="min-h-screen flex flex-col">
+      <header class="border-b border-base-300/60 backdrop-blur-sm sticky top-0 z-50 bg-base-100/80">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
+          <.link navigate={~p"/"} class="flex items-center gap-2 group">
+            <span class="text-lg font-bold tracking-tight">
+              <span class="text-primary">typing</span><span class="text-accent">vim</span>
+            </span>
+          </.link>
 
-    <main class="px-4 py-20 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
+          <nav class="flex items-center gap-1 text-sm">
+            <.nav_link to={~p"/type"} active={@active == :type}>type</.nav_link>
+            <.nav_link to={~p"/vim"} active={@active == :vim} class="hidden md:inline-flex">
+              vim
+            </.nav_link>
+            <.nav_link to={~p"/leaderboard"} active={@active == :leaderboard}>top</.nav_link>
+          </nav>
+
+          <div class="flex items-center gap-3 text-xs">
+            <%= if @online_count do %>
+              <div class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-base-200/60 border border-base-300/60">
+                <span class="relative flex size-2">
+                  <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75">
+                  </span>
+                  <span class="relative inline-flex size-2 rounded-full bg-success"></span>
+                </span>
+                <span class="font-mono tabular-nums">{@online_count} online</span>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </header>
+
+      <main class="flex-1 flex flex-col">
         {render_slot(@inner_block)}
-      </div>
-    </main>
+      </main>
+
+      <footer class="border-t border-base-300/60 py-4 text-center text-xs text-base-content/40">
+        built with phoenix + liveview · type fast, vim faster
+      </footer>
+    </div>
 
     <.flash_group flash={@flash} />
     """
   end
 
+  attr :to, :string, required: true
+  attr :active, :boolean, default: false
+  attr :class, :string, default: nil
+  slot :inner_block, required: true
+
+  def nav_link(assigns) do
+    ~H"""
+    <.link
+      navigate={@to}
+      class={[
+        "px-3 py-1.5 rounded-md transition-colors font-mono",
+        @active && "bg-base-200 text-primary",
+        !@active && "text-base-content/60 hover:text-base-content hover:bg-base-200/60",
+        @class
+      ]}
+    >
+      {render_slot(@inner_block)}
+    </.link>
+    """
+  end
+
   @doc """
   Shows the flash group with standard titles and content.
-
-  ## Examples
-
-      <.flash_group flash={@flash} />
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
   attr :id, :string, default: "flash-group", doc: "the optional id of flash container"
@@ -111,43 +123,6 @@ defmodule TypingVimWeb.Layouts do
         {gettext("Attempting to reconnect")}
         <.icon name="hero-arrow-path" class="ml-1 size-3 motion-safe:animate-spin" />
       </.flash>
-    </div>
-    """
-  end
-
-  @doc """
-  Provides dark vs light theme toggle based on themes defined in app.css.
-
-  See <head> in root.html.heex which applies the theme before page load.
-  """
-  def theme_toggle(assigns) do
-    ~H"""
-    <div class="card relative flex flex-row items-center border-2 border-base-300 bg-base-300 rounded-full">
-      <div class="absolute w-1/3 h-full rounded-full border-1 border-base-200 bg-base-100 brightness-200 left-0 [[data-theme=light]_&]:left-1/3 [[data-theme=dark]_&]:left-2/3 transition-[left]" />
-
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="system"
-      >
-        <.icon name="hero-computer-desktop-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
-
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="light"
-      >
-        <.icon name="hero-sun-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
-
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="dark"
-      >
-        <.icon name="hero-moon-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
     </div>
     """
   end

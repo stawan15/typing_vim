@@ -12,9 +12,7 @@ defmodule TypingVim.Application do
       TypingVim.Repo,
       {DNSCluster, query: Application.get_env(:typing_vim, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: TypingVim.PubSub},
-      # Start a worker by calling: TypingVim.Worker.start_link(arg)
-      # {TypingVim.Worker, arg},
-      # Start to serve requests, typically the last entry
+      TypingVimWeb.Presence,
       TypingVimWeb.Endpoint
     ]
 

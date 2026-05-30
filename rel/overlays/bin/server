@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+cd -P -- "$(dirname -- "$0")"
+
+# Run migrations + seeds (idempotent) before booting the server
+./typing_vim eval "TypingVim.Release.migrate"
+./typing_vim eval "TypingVim.Release.seed"
+
+PHX_SERVER=true exec ./typing_vim start
