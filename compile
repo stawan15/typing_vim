@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Custom compile script for Phoenix Static buildpack on Gigalixir.
+# Installs npm deps + builds CSS/JS assets, then runs phx.digest.
+
+set -e
+
+info() { echo "-----> $1"; }
+
+info "Installing npm dependencies for assets"
+cd assets
+npm install --no-audit --no-fund
+cd ..
+
+info "Installing tailwind + esbuild"
+mix assets.setup
+
+info "Building production assets"
+mix assets.deploy

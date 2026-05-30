@@ -22,28 +22,82 @@ mix phx.server
 # open http://localhost:4000
 ```
 
-## Deploy to Fly.io + Neon (free tier)
+## Deploy — FREE (no credit card required)
 
-1. Create a Postgres DB on [Neon](https://neon.tech) — copy the connection string.
-2. Install [flyctl](https://fly.io/docs/hands-on/install-flyctl/) and `fly auth login`.
-3. From the project root:
+### Option A: Gigalixir ⭐ recommended
 
-```bash
-fly apps create typing-vim          # or pick your own name + update fly.toml
-fly secrets set \
-  DATABASE_URL='postgres://user:pass@host/db?sslmode=require' \
-  SECRET_KEY_BASE="$(mix phx.gen.secret)" \
-  PHX_HOST=typing-vim.fly.dev
-fly deploy
-```
+Gigalixir is built for Elixir/Phoenix. Free tier: 1 app + 1 free Postgres (10k rows / 2GB), **no credit card required**.
 
-After first deploy, seed the vim lessons:
+#### 1. Install the Gigalixir CLI (one-time)
 
 ```bash
-fly ssh console -C "/app/bin/typing_vim eval 'Code.eval_file(\"/app/lib/typing_vim-0.1.0/priv/repo/seeds.exs\")'"
+pip3 install gigalixir --user
+# or: sudo apt install python3-pip && pip3 install gigalixir --user
 ```
 
-(or include a release task — see `lib/typing_vim/release.ex` if you add one.)
+#### 2. Sign up + login
+
+```bash
+gigalixir signup            # email + password — no credit card
+gigalixir login
+```
+
+#### 3. Create app + Postgres
+
+```bash
+cd ~/typing_vim
+gigalixir create -n typing-vim-stawan15
+# attach gigalixir's free postgres (sets DATABASE_URL automatically)
+gigalixir pg:create --free
+```
+
+#### 4. Set required secrets
+
+```bash
+gigalixir config:set SECRET_KEY_BASE="$(mix phx.gen.secret)"
+gigalixir config:set PHX_HOST="typing-vim-stawan15.gigalixirapp.com"
+gigalixir config:set POOL_SIZE=2     # free tier has limited connections
+```
+
+#### 5. Deploy (just git push!)
+
+```bash
+git push gigalixir develop:master
+```
+
+Gigalixir builds, deploys, and exposes the app at `https://<your-app>.gigalixirapp.com`.
+
+#### 6. Run migrations + seeds after first deploy
+
+```bash
+gigalixir ps:migrate
+gigalixir run -- mix run priv/repo/seeds.exs
+```
+
+#### 7. Open it
+
+```bash
+gigalixir open
+```
+
+---
+
+### Option B: Render (also free, sleeps after 15min)
+
+1. Push code to GitHub (already done)
+2. Sign up at https://render.com (GitHub OAuth, no CC for free web service)
+3. New → Web Service → connect repo → use Docker (auto-detects `Dockerfile`)
+4. Add Postgres add-on (free) — set `DATABASE_URL` env var
+5. Set `SECRET_KEY_BASE` and `PHX_HOST` env vars
+6. Deploy
+
+Free Render service sleeps after 15 min of no traffic (~30s cold start).
+
+---
+
+### Option C: Fly.io (requires credit card)
+
+See `fly.toml` and `Dockerfile` in this repo — but Fly now requires a credit card for verification (free tier still exists, just need the card on file).
 
 ## Project layout
 
