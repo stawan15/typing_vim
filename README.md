@@ -130,6 +130,43 @@ Open the tunnel URL in your browser. The app runs locally, Cloudflare proxies it
 
 **Persistent URL** (instead of a random `trycloudflare.com`): create a free Cloudflare account, run `cloudflared tunnel login`, then `cloudflared tunnel create typing-vim` and route a custom DNS record. See [Cloudflare docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-remote-tunnel/).
 
+#### 6. Day-2 operations — one-command redeploy
+
+After the first deploy, three scripts live in `scripts/` for daily use:
+
+```bash
+./scripts/deploy-local.sh   # idempotent: stops old → starts pg + tunnel + Phoenix
+./scripts/status.sh         # show pg/cloudflared/Phoenix state + current URL
+./scripts/stop.sh           # kill Phoenix + cloudflared (pg left running)
+```
+
+`deploy-local.sh` is **fully idempotent** — run it any time (after reboot, after a code change, after the tunnel URL rotates) and it will:
+1. start postgres if not running
+2. kill old Phoenix + cloudflared
+3. launch a new cloudflared quick tunnel, capture its random URL
+4. patch `PHX_HOST` in `.tunnel/env`
+5. `mix compile && mix ecto.migrate`
+6. start Phoenix in the background
+7. curl the public URL to confirm a 200
+
+Shell aliases (added to `~/.zshrc` by the setup):
+
+```bash
+tvim           # cd ~/typing_vim
+tvim-up        # ./scripts/deploy-local.sh
+tvim-status    # ./scripts/status.sh
+tvim-stop      # ./scripts/stop.sh
+tvim-logs      # tail -f .tunnel/phoenix.log
+tvim-cf-logs   # tail -f .tunnel/cloudflared.log
+tvim-url       # print current public URL
+```
+
+Tomorrow-morning workflow:
+
+```bash
+tvim-up        # ← that's it
+```
+
 ### 🥈 Other options (require credit card)
 
 | Provider | Free tier? | Credit card? |
