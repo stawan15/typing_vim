@@ -31,6 +31,14 @@ defmodule TypingVim.Vim do
     |> Repo.one()
   end
 
+  def prev_lesson(%Lesson{order_index: idx}) do
+    Lesson
+    |> where([l], l.order_index < ^idx)
+    |> order_by([l], desc: l.order_index)
+    |> limit(1)
+    |> Repo.one()
+  end
+
   @doc "Check if the submitted text matches expected (whitespace-sensitive)."
   def check_solution(%Lesson{expected_text: expected}, submitted) do
     normalize(expected) == normalize(submitted)

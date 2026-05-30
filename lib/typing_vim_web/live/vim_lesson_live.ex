@@ -20,6 +20,7 @@ defmodule TypingVimWeb.VimLessonLive do
     end
 
     next = Vim.next_lesson(lesson)
+    prev = Vim.prev_lesson(lesson)
 
     {:ok,
      socket
@@ -28,13 +29,57 @@ defmodule TypingVimWeb.VimLessonLive do
      |> assign(:online_count, Presence.online_count())
      |> assign(:lesson, lesson)
      |> assign(:next_lesson, next)
+     |> assign(:prev_lesson, prev)
      |> assign(:hint_open, false)
-     |> assign(:result, nil)}
+     |> assign(:result, nil)
+     |> assign(:live_mode, "normal")
+     |> assign(:live_keystrokes, 0)
+     |> assign(:live_elapsed_ms, 0)
+     |> assign(:live_progress, 0)
+     |> assign(:live_matched, false)
+     |> assign(:live_current_len, 0)
+     |> assign(:live_expected_len, String.length(lesson.expected_text))}
   end
 
   @impl true
   def handle_event("toggle_hint", _, socket) do
     {:noreply, assign(socket, :hint_open, !socket.assigns.hint_open)}
+  end
+
+  @impl true
+  def handle_event("vim:stats", params, socket) do
+    matched = Map.get(params, "matched", false)
+
+    socket =
+      socket
+      |> assign(:live_mode, Map.get(params, "mode", "normal"))
+      |> assign(:live_keystrokes, to_int(Map.get(params, "keystrokes", 0)))
+      |> assign(:live_elapsed_ms, to_int(Map.get(params, "elapsed_ms", 0)))
+      |> assign(:live_progress, to_int(Map.get(params, "progress_pct", 0)))
+      |> assign(:live_matched, matched)
+      |> assign(:live_current_len, to_int(Map.get(params, "current_len", 0)))
+
+    socket =
+      if matched and socket.assigns.result != :ok do
+        lesson = socket.assigns.lesson
+
+        {:ok, _} =
+          Vim.record_attempt(%{
+            guest_id: socket.assigns.guest_id,
+            lesson_id: lesson.id,
+            success: true,
+            keystroke_count: socket.assigns.live_keystrokes,
+            time_ms: socket.assigns.live_elapsed_ms
+          })
+
+        socket
+        |> assign(:result, :ok)
+        |> push_event("vim:result", %{success: true})
+      else
+        socket
+      end
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -64,7 +109,33 @@ defmodule TypingVimWeb.VimLessonLive do
     {:noreply,
      socket
      |> assign(:result, nil)
+     |> assign(:live_mode, "normal")
+     |> assign(:live_keystrokes, 0)
+     |> assign(:live_elapsed_ms, 0)
+     |> assign(:live_progress, 0)
+     |> assign(:live_matched, false)
      |> push_event("vim:reset", %{text: socket.assigns.lesson.initial_text})}
+  end
+
+  @impl true
+  def handle_event("nav_next", _, socket) do
+    case socket.assigns.next_lesson do
+      nil -> {:noreply, push_navigate(socket, to: ~p"/vim")}
+      next -> {:noreply, push_navigate(socket, to: ~p"/vim/#{next.slug}")}
+    end
+  end
+
+  @impl true
+  def handle_event("nav_prev", _, socket) do
+    case socket.assigns.prev_lesson do
+      nil -> {:noreply, push_navigate(socket, to: ~p"/vim")}
+      prev -> {:noreply, push_navigate(socket, to: ~p"/vim/#{prev.slug}")}
+    end
+  end
+
+  @impl true
+  def handle_event("nav_quit", _, socket) do
+    {:noreply, push_navigate(socket, to: ~p"/vim")}
   end
 
   @impl true
@@ -77,109 +148,223 @@ defmodule TypingVimWeb.VimLessonLive do
   defp to_int(v) when is_float(v), do: trunc(v)
   defp to_int(_), do: 0
 
+  defp format_mode(mode) do
+    base =
+      mode
+      |> to_string()
+      |> String.split("-", parts: 2)
+      |> List.first()
+      |> String.upcase()
+
+    "-- #{base} --"
+  end
+
+  defp mode_class("insert" <> _), do: "text-[#fb4934]"
+  defp mode_class("visual" <> _), do: "text-[#d3869b]"
+  defp mode_class("replace" <> _), do: "text-[#fe8019]"
+  defp mode_class(_), do: "text-[#b8bb26]"
+
+  defp format_time(ms) do
+    total_seconds = div(ms, 1000)
+    mins = div(total_seconds, 60)
+    secs = rem(total_seconds, 60)
+    :io_lib.format("~2..0B:~2..0B", [mins, secs]) |> IO.iodata_to_binary()
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} online_count={@online_count} active={@active}>
-      <section class="flex-1 px-4 py-8 sm:py-12">
-        <div class="max-w-3xl mx-auto space-y-6">
+      <section class="flex-1 px-4 py-6 sm:py-10">
+        <div class="max-w-5xl mx-auto space-y-6">
           <!-- Mobile blocker -->
           <div class="md:hidden rounded-lg bg-warning/10 border border-warning/30 text-warning p-6 text-center font-mono text-sm">
-            ⌨️ vim lessons require a physical keyboard.<br /> please open on desktop.
+            keyboard required.<br /> please open on a desktop.
           </div>
 
-          <div class="hidden md:block space-y-6">
-            <header class="space-y-2">
+          <div class="hidden md:block space-y-5">
+            <!-- Breadcrumb + title -->
+            <header class="space-y-3">
               <.link
                 navigate={~p"/vim"}
-                class="text-xs text-base-content/40 hover:text-base-content font-mono"
+                class="text-xs text-base-content/50 hover:text-base-content font-mono"
               >
-                ← all lessons
+                ← all lessons (:q)
               </.link>
               <div class="flex items-baseline justify-between gap-4">
-                <h1 class="text-2xl sm:text-3xl font-bold">{@lesson.title}</h1>
-                <span class="text-xs text-base-content/40 font-mono uppercase">
-                  {@lesson.category}
+                <h1 class="text-2xl sm:text-3xl font-bold font-mono">
+                  <span class="text-[#83a598]">:</span>{@lesson.title}
+                </h1>
+                <span class="text-xs text-base-content/50 font-mono uppercase tracking-wider">
+                  [{@lesson.category}] · diff {@lesson.difficulty}
                 </span>
               </div>
               <%= if @lesson.description do %>
-                <p class="text-base-content/70 leading-relaxed">{@lesson.description}</p>
+                <p class="text-base-content/70 leading-relaxed text-sm">
+                  {@lesson.description}
+                </p>
               <% end %>
             </header>
             
-    <!-- Expected result preview -->
-            <div class="text-xs text-base-content/40 font-mono">
-              target output:
-            </div>
-            <pre
-              class="text-sm font-mono bg-base-300/30 border border-base-300/60 rounded-md p-3 whitespace-pre-wrap break-words text-success/80"
-              phx-no-curly-interpolation
-            >{@lesson.expected_text}</pre>
-            
-    <!-- CodeMirror editor mount point -->
-            <div
-              id="vim-editor"
-              phx-hook="VimEditor"
-              phx-update="ignore"
-              data-initial={@lesson.initial_text}
-              data-slug={@lesson.slug}
-              class="rounded-md border border-base-300/60 overflow-hidden focus-within:border-primary/60 transition-colors"
-            >
-            </div>
-
-            <div class="flex flex-wrap items-center gap-3">
-              <button
-                phx-click={JS.dispatch("vim:request-check")}
-                class="px-4 py-2 rounded-md bg-primary text-primary-content font-semibold text-sm hover:bg-primary/90"
-              >
-                check (⏎ in normal mode)
-              </button>
-              <button
-                phx-click="reset"
-                class="px-4 py-2 rounded-md bg-base-300/50 hover:bg-base-300 text-sm font-mono"
-              >
-                reset
-              </button>
-              <button
-                phx-click="toggle_hint"
-                class="ml-auto px-4 py-2 rounded-md bg-base-200/60 border border-base-300/60 hover:bg-base-300 text-sm font-mono"
-              >
-                <%= if @hint_open do %>
-                  hide hint
-                <% else %>
-                  show hint
-                <% end %>
-              </button>
-            </div>
-
-            <%= if @hint_open and @lesson.hint do %>
-              <div class="rounded-md bg-info/5 border border-info/30 p-4 text-sm text-info-content/80 font-mono leading-relaxed">
-                💡 {@lesson.hint}
+    <!-- Target output preview (terminal-style) -->
+            <div class="rounded-md overflow-hidden border border-[#3c3836] bg-[#1d2021] font-mono text-base shadow-lg">
+              <div class="flex items-center gap-2 px-3 py-1.5 bg-[#282828] border-b border-[#3c3836]">
+                <span class="w-3 h-3 rounded-full bg-[#fb4934]"></span>
+                <span class="w-3 h-3 rounded-full bg-[#fabd2f]"></span>
+                <span class="w-3 h-3 rounded-full bg-[#b8bb26]"></span>
+                <span class="ml-3 text-xs text-[#928374]">target.txt — read-only</span>
               </div>
-            <% end %>
+              <pre
+                class="px-4 py-3 text-[#b8bb26] whitespace-pre-wrap break-words text-[15px] leading-relaxed"
+                phx-no-curly-interpolation
+              >{@lesson.expected_text}</pre>
+            </div>
+            
+    <!-- Editor window (terminal frame) -->
+            <div class="rounded-md overflow-hidden border border-[#3c3836] bg-[#1d2021] shadow-xl">
+              <div class="flex items-center gap-2 px-3 py-1.5 bg-[#282828] border-b border-[#3c3836] font-mono text-xs">
+                <span class="w-3 h-3 rounded-full bg-[#fb4934]"></span>
+                <span class="w-3 h-3 rounded-full bg-[#fabd2f]"></span>
+                <span class="w-3 h-3 rounded-full bg-[#b8bb26]"></span>
+                <span class="ml-3 text-[#928374]">
+                  ~/lesson/{@lesson.slug}.txt — VIM
+                </span>
+                <span class="ml-auto text-[#928374]">utf-8 · suggested: {@lesson.primary_keys}</span>
+              </div>
 
+              <div
+                id="vim-editor"
+                phx-hook="VimEditor"
+                phx-update="ignore"
+                data-initial={@lesson.initial_text}
+                data-expected={@lesson.expected_text}
+                data-slug={@lesson.slug}
+              >
+              </div>
+              
+    <!-- Vim status line (live) -->
+              <div class="flex items-stretch font-mono text-xs bg-[#282828] border-t border-[#3c3836]">
+                <div class={["px-3 py-1.5 font-semibold", mode_class(@live_mode)]}>
+                  {format_mode(@live_mode)}
+                </div>
+                <div class="px-3 py-1.5 text-[#928374] border-l border-[#3c3836]">
+                  {@lesson.slug}.txt
+                </div>
+                <div class="ml-auto flex items-stretch text-[#a89984]">
+                  <div class="px-3 py-1.5 border-l border-[#3c3836]">
+                    keys <span class="text-[#fabd2f]">{@live_keystrokes}</span>
+                  </div>
+                  <div class="px-3 py-1.5 border-l border-[#3c3836]">
+                    time <span class="text-[#fabd2f]">{format_time(@live_elapsed_ms)}</span>
+                  </div>
+                  <div class="px-3 py-1.5 border-l border-[#3c3836]">
+                    {@live_current_len}/{@live_expected_len} ch
+                  </div>
+                  <div class="px-3 py-1.5 border-l border-[#3c3836] bg-[#1d2021]">
+                    <span class={[
+                      "font-semibold",
+                      @live_matched && "text-[#b8bb26]",
+                      !@live_matched && "text-[#fabd2f]"
+                    ]}>
+                      <%= if @live_matched do %>
+                        ✓ 100%
+                      <% else %>
+                        {@live_progress}%
+                      <% end %>
+                    </span>
+                  </div>
+                </div>
+              </div>
+              
+    <!-- Progress bar -->
+              <div class="h-1 bg-[#1d2021] relative overflow-hidden">
+                <div
+                  class={[
+                    "absolute inset-y-0 left-0 transition-all duration-150",
+                    @live_matched && "bg-[#b8bb26]",
+                    !@live_matched && "bg-[#fabd2f]"
+                  ]}
+                  style={"width: #{@live_progress}%"}
+                >
+                </div>
+              </div>
+            </div>
+            
+    <!-- Success banner (no buttons — :n / gn navigates) -->
             <%= cond do %>
               <% @result == :ok -> %>
-                <div class="rounded-md bg-success/10 border border-success/30 p-4 flex items-center justify-between gap-4 font-mono">
-                  <div class="text-success">✓ correct! lesson solved.</div>
-                  <%= if @next_lesson do %>
-                    <.link
-                      navigate={~p"/vim/#{@next_lesson.slug}"}
-                      class="px-4 py-1.5 rounded bg-success/20 hover:bg-success/30 text-success text-sm"
-                    >
-                      next → {@next_lesson.title}
-                    </.link>
-                  <% else %>
-                    <.link navigate={~p"/vim"} class="text-sm text-success/80 underline">
-                      back to lessons
-                    </.link>
-                  <% end %>
-                </div>
-              <% @result == :fail -> %>
-                <div class="rounded-md bg-error/10 border border-error/30 p-4 text-sm text-error font-mono">
-                  ✗ not quite. compare your output with the target above, then try again or check the hint.
+                <div class="rounded-md bg-[#b8bb26]/10 border border-[#b8bb26]/40 p-4 font-mono text-sm space-y-1">
+                  <div class="text-[#b8bb26] font-semibold">
+                    ✓ solved in {format_time(@live_elapsed_ms)} · {@live_keystrokes} keystrokes
+                  </div>
+                  <div class="text-[#a89984]">
+                    <%= if @next_lesson do %>
+                      type <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">:n</kbd>
+                      or <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">gn</kbd>
+                      → next: <span class="text-[#83a598]">:{@next_lesson.title}</span>
+                    <% else %>
+                      that was the last lesson! type
+                      <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">:q</kbd>
+                      to go back
+                    <% end %>
+                  </div>
                 </div>
               <% true -> %>
+            <% end %>
+
+            <%= if @hint_open and @lesson.hint do %>
+              <div class="rounded-md bg-[#1d2021] border border-[#83a598]/40 p-4 text-sm text-[#83a598] font-mono leading-relaxed">
+                <span class="text-[#fabd2f]">hint &gt;</span> {@lesson.hint}
+                <div class="mt-2 text-xs text-[#928374]">
+                  type <kbd class="px-1 bg-[#3c3836] rounded">:h</kbd> again to hide
+                </div>
+              </div>
+            <% end %>
+            
+    <!-- Keyboard cheatsheet (always visible — replaces fake buttons) -->
+            <div class="rounded-md border border-[#3c3836] bg-[#282828]/40 px-4 py-3 font-mono text-xs text-[#a89984] flex flex-wrap items-center gap-x-5 gap-y-1.5">
+              <span class="text-[#928374] uppercase tracking-wider">
+                no mouse needed →
+              </span>
+              <span>
+                <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">:w</kbd>
+                <span class="ml-1 text-[#928374]">check</span>
+              </span>
+              <span>
+                <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">:n</kbd>
+                / <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">gn</kbd>
+                <span class="ml-1 text-[#928374]">next</span>
+              </span>
+              <span>
+                <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">:p</kbd>
+                / <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">gp</kbd>
+                <span class="ml-1 text-[#928374]">prev</span>
+              </span>
+              <span>
+                <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">:r</kbd>
+                / <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">gr</kbd>
+                <span class="ml-1 text-[#928374]">reset</span>
+              </span>
+              <span>
+                <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">:h</kbd>
+                / <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">gh</kbd>
+                <span class="ml-1 text-[#928374]">hint</span>
+              </span>
+              <span>
+                <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">:q</kbd>
+                / <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">gq</kbd>
+                <span class="ml-1 text-[#928374]">list</span>
+              </span>
+              <span>
+                <kbd class="px-1.5 py-0.5 bg-[#3c3836] rounded text-[#fabd2f]">:wq</kbd>
+                <span class="ml-1 text-[#928374]">check + next</span>
+              </span>
+            </div>
+
+            <%= if @result == :fail do %>
+              <div class="rounded-md bg-[#fb4934]/10 border border-[#fb4934]/40 p-3 text-sm text-[#fb4934] font-mono">
+                ✗ not matching yet — watch the progress bar above
+              </div>
             <% end %>
           </div>
         </div>
