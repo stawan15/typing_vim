@@ -38,7 +38,11 @@ defmodule TypingVimWeb.VimLessonLive do
      |> assign(:live_progress, 0)
      |> assign(:live_matched, false)
      |> assign(:live_current_len, 0)
-     |> assign(:live_expected_len, String.length(lesson.expected_text))}
+     |> assign(:live_expected_len, String.length(lesson.expected_text))
+     |> assign(:live_line, 1)
+     |> assign(:live_col, 0)
+     |> assign(:user_keys, "")
+     |> assign(:key_similarity, 0)}
   end
 
   @impl true
@@ -49,6 +53,20 @@ defmodule TypingVimWeb.VimLessonLive do
   @impl true
   def handle_event("vim:stats", params, socket) do
     matched = Map.get(params, "matched", false)
+    lesson = socket.assigns.lesson
+    line = to_int(Map.get(params, "line", 1))
+    col = to_int(Map.get(params, "col", 0))
+    user_keys = Map.get(params, "user_keys", "") |> to_string()
+
+    motion_solved? =
+      lesson.task_type == "motion" and Vim.check_motion(lesson, line, col)
+
+    similarity =
+      if lesson.task_type == "motion" do
+        Vim.key_similarity(lesson.expected_keys || lesson.primary_keys, user_keys)
+      else
+        socket.assigns.key_similarity
+      end
 
     socket =
       socket
@@ -56,13 +74,17 @@ defmodule TypingVimWeb.VimLessonLive do
       |> assign(:live_keystrokes, to_int(Map.get(params, "keystrokes", 0)))
       |> assign(:live_elapsed_ms, to_int(Map.get(params, "elapsed_ms", 0)))
       |> assign(:live_progress, to_int(Map.get(params, "progress_pct", 0)))
-      |> assign(:live_matched, matched)
+      |> assign(:live_matched, matched or motion_solved?)
       |> assign(:live_current_len, to_int(Map.get(params, "current_len", 0)))
+      |> assign(:live_line, line)
+      |> assign(:live_col, col)
+      |> assign(:user_keys, user_keys)
+      |> assign(:key_similarity, similarity)
+
+    solved? = (lesson.task_type == "edit" and matched) or motion_solved?
 
     socket =
-      if matched and socket.assigns.result != :ok do
-        lesson = socket.assigns.lesson
-
+      if solved? and socket.assigns.result != :ok do
         {:ok, _} =
           Vim.record_attempt(%{
             guest_id: socket.assigns.guest_id,
@@ -114,6 +136,8 @@ defmodule TypingVimWeb.VimLessonLive do
      |> assign(:live_elapsed_ms, 0)
      |> assign(:live_progress, 0)
      |> assign(:live_matched, false)
+     |> assign(:user_keys, "")
+     |> assign(:key_similarity, 0)
      |> push_event("vim:reset", %{text: socket.assigns.lesson.initial_text})}
   end
 
@@ -239,6 +263,9 @@ defmodule TypingVimWeb.VimLessonLive do
                 data-initial={@lesson.initial_text}
                 data-expected={@lesson.expected_text}
                 data-slug={@lesson.slug}
+                data-task-type={@lesson.task_type}
+                data-target-line={@lesson.target_line}
+                data-target-col={@lesson.target_col}
               >
               </div>
               
@@ -259,6 +286,20 @@ defmodule TypingVimWeb.VimLessonLive do
                   </div>
                   <div class="px-3 py-1.5 border-l border-[#3c3836]">
                     {@live_current_len}/{@live_expected_len} ch
+                  </div>
+                  <div class="px-3 py-1.5 border-l border-[#3c3836]">
+                    <%= if @lesson.task_type == "motion" do %>
+                      <span class="text-[#928374]">cur</span>
+                      <span class="text-[#fabd2f]">{@live_line}:{@live_col}</span>
+                      <%= if @lesson.target_line do %>
+                        <span class="text-[#928374]">→</span>
+                        <span class="text-[#83a598]">
+                          {@lesson.target_line}{if @lesson.target_col, do: ":#{@lesson.target_col}"}
+                        </span>
+                      <% end %>
+                    <% else %>
+                      <span class="text-[#928374]">{@live_line}:{@live_col}</span>
+                    <% end %>
                   </div>
                   <div class="px-3 py-1.5 border-l border-[#3c3836] bg-[#1d2021]">
                     <span class={[
@@ -290,7 +331,37 @@ defmodule TypingVimWeb.VimLessonLive do
               </div>
             </div>
             
-    <!-- Success banner (no buttons — :n / gn navigates) -->
+    <!-- Key-sequence comparison (motion lessons only) -->
+            <%= if @lesson.task_type == "motion" do %>
+              <div class="rounded-md border border-[#3c3836] bg-[#1d2021] p-4 font-mono text-sm space-y-2">
+                <div class="flex items-center justify-between text-xs uppercase tracking-wider text-[#928374]">
+                  <span>your keys vs expected</span>
+                  <span class={[
+                    "px-2 py-0.5 rounded",
+                    @key_similarity >= 100 && "bg-[#b8bb26]/20 text-[#b8bb26]",
+                    @key_similarity < 100 && @key_similarity >= 60 &&
+                      "bg-[#fabd2f]/20 text-[#fabd2f]",
+                    @key_similarity < 60 && "bg-[#fb4934]/20 text-[#fb4934]"
+                  ]}>
+                    {@key_similarity}% similar
+                  </span>
+                </div>
+                <div class="grid grid-cols-[80px_1fr] gap-x-3 gap-y-1.5 items-baseline">
+                  <span class="text-[#928374] text-xs">expected</span>
+                  <code class="text-[#83a598] bg-[#282828] px-2 py-1 rounded">
+                    {@lesson.expected_keys || @lesson.primary_keys || "—"}
+                  </code>
+                  <span class="text-[#928374] text-xs">you typed</span>
+                  <code class={[
+                    "px-2 py-1 rounded bg-[#282828] min-h-[28px] break-all",
+                    @user_keys == "" && "text-[#665c54] italic",
+                    @user_keys != "" && "text-[#fabd2f]"
+                  ]}>
+                    {if @user_keys == "", do: "(start typing in normal mode…)", else: @user_keys}
+                  </code>
+                </div>
+              </div>
+            <% end %>
             <%= cond do %>
               <% @result == :ok -> %>
                 <div class="rounded-md bg-[#b8bb26]/10 border border-[#b8bb26]/40 p-4 font-mono text-sm space-y-1">

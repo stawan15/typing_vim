@@ -120,9 +120,13 @@ const VimEditor = {
 
     this.initial = this.el.dataset.initial || "";
     this.expected = this.el.dataset.expected || "";
+    this.taskType = this.el.dataset.taskType || "edit";
+    this.targetLine = parseInt(this.el.dataset.targetLine, 10);
+    this.targetCol = parseInt(this.el.dataset.targetCol, 10);
     this.keystrokes = 0;
     this.startedAt = Date.now();
     this.currentMode = "normal";
+    this.userKeys = "";
 
     this.view = new EditorView({
       parent: this.el,
@@ -131,9 +135,10 @@ const VimEditor = {
 
     this.attachVimEvents();
 
-    this.onKey = () => {
+    this.onKey = (e) => {
       this.keystrokes++;
       keySound.click();
+      this.recordVimKey(e);
       this.scheduleStatsPush();
     };
     this.el.addEventListener("keydown", this.onKey);
@@ -213,12 +218,57 @@ const VimEditor = {
     const text = this.view.state.doc.toString();
     const elapsed = Date.now() - this.startedAt;
     const progress = this.computeProgress(text);
+    const { line, col } = this.cursorPos();
     this.pushEvent("vim:stats", {
       mode: this.currentMode,
       keystrokes: this.keystrokes,
       elapsed_ms: elapsed,
+      line,
+      col,
+      user_keys: this.userKeys,
       ...progress,
     });
+  },
+
+  cursorPos() {
+    try {
+      const sel = this.view.state.selection.main;
+      const lineObj = this.view.state.doc.lineAt(sel.head);
+      return { line: lineObj.number, col: sel.head - lineObj.from };
+    } catch (_e) {
+      return { line: 1, col: 0 };
+    }
+  },
+
+  // Record a normal/visual-mode keystroke into the user_keys string for
+  // similarity scoring on motion lessons. Skip when in insert mode and
+  // skip modifier-only keypresses.
+  recordVimKey(e) {
+    const cm = this.view.cm;
+    const insert =
+      cm && cm.state && cm.state.vim && cm.state.vim.insertMode;
+    if (insert) return;
+
+    const k = e.key;
+    if (!k || k === "Shift" || k === "Control" || k === "Alt" || k === "Meta") return;
+
+    let token;
+    if (k === "Escape") token = "<esc>";
+    else if (k === "Enter") token = "<cr>";
+    else if (k === "Backspace") token = "<bs>";
+    else if (k === "Tab") token = "<tab>";
+    else if (k === " ") token = "<space>";
+    else if (k.length === 1) {
+      // Ctrl-modifier shortcuts (e.g. Ctrl-A → "<c-a>")
+      if (e.ctrlKey) token = `<c-${k.toLowerCase()}>`;
+      else token = k;
+    } else {
+      // Arrow keys, F-keys, etc.
+      token = `<${k.toLowerCase()}>`;
+    }
+
+    // Cap recorded length to avoid runaway strings.
+    if (this.userKeys.length < 64) this.userKeys += token;
   },
 
   makeState(text) {
@@ -246,7 +296,7 @@ const VimEditor = {
           },
         ]),
         EditorView.updateListener.of((u) => {
-          if (u.docChanged) this.scheduleStatsPush();
+          if (u.docChanged || u.selectionSet) this.scheduleStatsPush();
         }),
       ],
     });
@@ -256,6 +306,7 @@ const VimEditor = {
     this.keystrokes = 0;
     this.startedAt = Date.now();
     this.currentMode = "normal";
+    this.userKeys = "";
     this.view.setState(this.makeState(text));
     this.attachVimEvents();
     setTimeout(() => this.view.focus(), 30);
